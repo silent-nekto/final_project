@@ -3,7 +3,7 @@ import socket
 import threading
 import time
 import traceback
-from cpython cimport PyBytes_AsString
+from cpython cimport PyBytes_FromStringAndSize
 from command_processor import Processor
 from datetime import datetime
 from libc.stdio cimport printf
@@ -86,6 +86,7 @@ cdef class CyTCPServer:
         cdef str response
         cdef bytes response_bytes
         cdef unsigned char* c_data
+        cdef char* chunk
 
         try:
             client_socket.settimeout(1.0)
@@ -94,16 +95,16 @@ cdef class CyTCPServer:
             while self.running:
                 try:
                     # Читаем данные
-                    received_data = client_socket.recv(1024)
-                    c_data = <unsigned char*> received_data
-                    if not received_data:
+                    chunk = <char *>malloc(1024)
+                    chunk = client_socket.recv(1024)
+                    if not chunk:
                         break
-                    printf(b'Blob received 1: ' + c_data)
+                    printf(b'Blob received 1: ' + c_data + len(chunk))
                     bin_cmd += c_data
                     if b'\n' not in bin_cmd:
                         continue
-                    printf(b'Blob received 2: ' + bin_cmd)
-                    response = self.processor.handle_command(PyBytes_AsString(bin_cmd[:-1]))
+                    printf(b'Blob received 2: ' + received_data)
+                    response = self.processor.handle_command(PyBytes_FromStringAndSize(bin_cmd, len(bin_cmd)))
                     bin_cmd = b''
 
                     # Отправляем ответ
