@@ -3,10 +3,89 @@ import socket
 import threading
 import time
 import traceback
-from cpython cimport PyBytes_FromStringAndSize
-from command_processor import Processor
 from datetime import datetime
 from libc.stdio cimport printf
+import traceback
+import pickle
+from collections import OrderedDict
+from threading import Lock, Event
+import os
+
+
+class Record:
+    def __init__(self):
+        self.data = None
+        self.ev = Event()
+
+
+class Results:
+    def __init__(self, max_size=100):
+        self.cache = OrderedDict()
+        self.lock = Lock()
+        self.max_size = max_size
+
+    def reserve(self, cmd_id):
+        with self.lock:
+            self.cache[cmd_id] = Record()
+            if len(self.cache) > self.max_size:
+                self.cache.popitem(last=False)
+    
+    def put_data(self, cmd_id, data):
+        with self.lock:
+            record = self.cache[cmd_id]
+            record.data = data
+            record.ev.set()
+    
+    def get_data(self, cmd_id, timeout=60):
+        with self.lock:
+            record = self.cache[cmd_id]
+            if not record.ev.is_set():
+                if not record.ev.wait(timeout):
+                    raise TimeoutError
+
+        return record.data
+    
+    def in_cache(self, cmd_id):
+        with self.lock:
+            return cmd_id in self.cache
+
+
+class FileService:
+    def list_dir(self, path):
+        return os.listdir(path)
+    
+    def write_to_file(self, path, mode, data):
+        with open(path, mode=mode) as f:
+            f.write(data)
+    
+    def delete_file(self, path):
+        os.remove(path)
+
+
+class Processor:
+    def __init__(self):
+        self.file_svc = FileService()
+        self.results = Results()
+
+    def handle_command(self, bin_cmd: object):
+        cmd = pickle.loads(bin_cmd)
+        method_name = cmd['method']
+        cmd_id = cmd['id']
+        if self.results.in_cache(cmd_id):
+            result = self.results.get_data(cmd_id, 2)
+        else:
+            self.results.reserve(cmd_id)
+            method = getattr(self.file_svc, method_name, None)
+            result = {}
+            if method is None:
+                result['error'] = ValueError(f'Method {method} is not implemented')
+            else:
+                try:
+                    result['result'] = method(*cmd.get('args', []), **cmd.get('kwargs', {}))
+                except Exception as e:
+                    result['error'] = e
+            self.results.put_data(cmd_id, result)
+        return pickle.dumps(result)
 
 
 cdef class CyTCPServer:
@@ -79,14 +158,17 @@ cdef class CyTCPServer:
                 if self.running:
                     printf(b"Accept error: %s\n", str(e).encode('utf-8'))
 
+    def _read_chunk(self, client_socket, size):
+        return client_socket.recv(size)
+
     cdef void _handle_client(self, object client_socket, str client_ip, int client_port):
         """Обработка клиентского соединения"""
         cdef bytes received_data
         cdef str message
-        cdef str response
+        cdef bytes response
         cdef bytes response_bytes
-        cdef unsigned char* c_data
-        cdef char* chunk
+        cdef bytes chunk
+        cdef int cmd_len = 0
 
         try:
             client_socket.settimeout(1.0)
@@ -95,28 +177,30 @@ cdef class CyTCPServer:
             while self.running:
                 try:
                     # Читаем данные
-                    chunk = <char *>malloc(1024)
-                    chunk = client_socket.recv(1024)
+                    if cmd_len == 0:
+                        # читаем длину команды
+                        chunk = self._read_chunk(client_socket, 8)
+                        cmd_len = int.from_bytes(chunk, 'big')
+                        continue
+                    chunk = self._read_chunk(client_socket, 1024)
                     if not chunk:
                         break
-                    printf(b'Blob received 1: ' + c_data + len(chunk))
-                    bin_cmd += c_data
-                    if b'\n' not in bin_cmd:
+                    bin_cmd += chunk
+                    if cmd_len != len(bin_cmd):
                         continue
-                    printf(b'Blob received 2: ' + received_data)
-                    response = self.processor.handle_command(PyBytes_FromStringAndSize(bin_cmd, len(bin_cmd)))
+                    cmd_len = 0
+                    response = self.processor.handle_command(bin_cmd)
                     bin_cmd = b''
 
                     # Отправляем ответ
-                    client_socket.sendall(response)
-
+                    client_socket.sendall(len(response).to_bytes(8, 'big') + response)
                 except socket.timeout:
                     continue
                 except Exception as e:
                     printf(b"Client error %s:%d: %s\n",
                           client_ip.encode('utf-8'), client_port, str(e).encode('utf-8'))
                     traceback.print_exc()
-                    break
+                    raise
 
         finally:
             # Всегда закрываем соединение
@@ -128,35 +212,6 @@ cdef class CyTCPServer:
             self.connection_count -= 1
             printf(b"Connection closed: %s:%d (active: %d)\n",
                   client_ip.encode('utf-8'), client_port, self.connection_count)
-
-    cdef str _process_message(self, str message, str client_ip, int client_port):
-        """Обработка входящих сообщений (идемпотентные команды)"""
-        cdef str cmd = message.upper().strip()
-
-        if cmd == "HELLO":
-            return f"Hello, {client_ip}:{client_port}!\n"
-
-        elif cmd == "TIME":
-            return f"Server time: {datetime.now().isoformat()}\n"
-
-        elif cmd == "STATS":
-            return f"Active connections: {self.connection_count}\n"
-
-        elif cmd == "PING":
-            return "PONG\n"
-
-        elif cmd.startswith("ECHO "):
-            return message[5:] + "\n"
-
-        elif cmd == "QUIT":
-            return "Goodbye!\n"
-
-        elif cmd == "UPTIME":
-            # Здесь можно добавить логику отслеживания времени работы
-            return "Server is running\n"
-
-        else:
-            return f"Unknown command: '{message}'. Available: HELLO, TIME, STATS, PING, ECHO, QUIT, UPTIME\n"
 
     cpdef void stop(self):
         """Корректная остановка сервера"""
@@ -186,7 +241,6 @@ def main():
     parser.add_argument('--ip', required=True, type=str, help='address of interface to listen')
     parser.add_argument('--port', required=True, type=int, help='port to listen')
     args = parser.parse_args()
-    printf(b'Start server!')
     server = CyTCPServer(Processor(), args.ip, args.port)
     server.start()
 
