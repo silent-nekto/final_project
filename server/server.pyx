@@ -19,27 +19,40 @@ class Record:
 
 
 class Results:
+    """
+    Кэш для результатов
+    """
     def __init__(self, max_size=100):
         self.cache = OrderedDict()
         self.lock = Lock()
         self.max_size = max_size
 
     def reserve(self, cmd_id):
+        """
+        Резервируем место в кеше по cmd_id
+        """
         with self.lock:
             self.cache[cmd_id] = Record()
             if len(self.cache) > self.max_size:
                 self.cache.popitem(last=False)
     
     def put_data(self, cmd_id, data):
+        """
+        Сохраняем результат выполнения команды
+        """
         with self.lock:
             record = self.cache[cmd_id]
             record.data = data
             record.ev.set()
     
     def get_data(self, cmd_id, timeout=60):
+        """
+        Получаем результат выполнения команды из кеша
+        """
         with self.lock:
             record = self.cache[cmd_id]
             if not record.ev.is_set():
+                # если ev не установлен, занчит команда еще выполняется, пробуем подождать завершения
                 if not record.ev.wait(timeout):
                     raise TimeoutError
 
@@ -51,6 +64,9 @@ class Results:
 
 
 class FileService:
+    """
+    Файловый сервис
+    """
     def list_dir(self, path):
         return os.listdir(path)
     
@@ -63,6 +79,9 @@ class FileService:
 
 
 class Processor:
+    """
+    Класс для обработки комманд
+    """
     def __init__(self):
         self.file_svc = FileService()
         self.results = Results()
