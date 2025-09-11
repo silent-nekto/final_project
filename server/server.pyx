@@ -91,8 +91,10 @@ class Processor:
         method_name = cmd['method']
         cmd_id = cmd['id']
         if self.results.in_cache(cmd_id):
+            # команда была получена ранее, возьмем результат ее выполнения из кеша
             result = self.results.get_data(cmd_id, 2)
         else:
+            # резервируем место в кеше
             self.results.reserve(cmd_id)
             method = getattr(self.file_svc, method_name, None)
             result = {}
@@ -103,6 +105,7 @@ class Processor:
                     result['result'] = method(*cmd.get('args', []), **cmd.get('kwargs', {}))
                 except Exception as e:
                     result['error'] = e
+            # сохраним результат в кеше на случай, если команда прилетит на выполнения второй раз
             self.results.put_data(cmd_id, result)
         return pickle.dumps(result)
 

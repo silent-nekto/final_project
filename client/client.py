@@ -13,11 +13,12 @@ class Client:
         self._connect()
 
     def _connect(self):
-        #self.sock.connect(("127.0.0.1", 1234))
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.connect((self.ip, self.port))
         if self.timeout > 60:
-            self.sock.settimeout(1)
+            # для переподключения на случай обрыва соединения
+            # т.к. ошибка чтения из закрытого соединения может прилететь не сразу
+            self.sock.settimeout(60)
 
     def close(self):
         self.sock.close()
@@ -40,6 +41,7 @@ class Client:
         cmd_len = len(bin_cmd).to_bytes(8, 'big')
         
         while elapsed < self.timeout:
+            elapsed = time.time() - start
             try:
                 self.sock.sendall(cmd_len + bin_cmd)
                 response = bytes()
@@ -48,14 +50,13 @@ class Client:
                     chunk = self.sock.recv(1024)
                     print(chunk)
                     if not chunk:
-                        print(f'empty chunk')
                         break
                     response += chunk
             except socket.timeout:
+                #  возможно разрыв
                 print('reconnecting...')
                 self._connect()
                 continue
-            print(f'====>{response}')
             return pickle.loads(response)
         raise TimeoutError('Command was hanged')
 
