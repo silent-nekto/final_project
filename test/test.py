@@ -25,7 +25,7 @@ def test_list_dir(server, client, tmp_path):
     folder = tmp_path / 'test'
     folder.mkdir()
     result = client.list_dir(str(tmp_path))
-    assert 'test' in result['result']
+    assert 'test' in result
 
 def test_write_file(server, client, tmp_path):
     file_path = tmp_path / 'test.file'
@@ -33,6 +33,18 @@ def test_write_file(server, client, tmp_path):
     with open(file_path, mode='rb') as f:
         data = f.read()
     assert data == b'tratata'
+
+def test_get_hash_file_md5(server, client, tmp_path):
+    file_path = tmp_path / 'test.file'
+    client.write(file_path, 'wb', b'tratata')
+    hash = client.get_hash(file_path, 'md5')
+    assert hash == 'cb1d3a6249c2d223c620393fa6420868'
+
+def test_get_hash_file_sha256(server, client, tmp_path):
+    file_path = tmp_path / 'test.file'
+    client.write(file_path, 'wb', b'tratata')
+    hash = client.get_hash(file_path, 'sha256')
+    assert hash == '4ad5921e53e07ed23774a08c5ab1e6da3686dba7c47b4d90c07fd68d5a6c679d'
 
 def test_delete_file(server, client, tmp_path):
     file_path = tmp_path / 'test.file'

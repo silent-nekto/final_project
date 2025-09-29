@@ -31,7 +31,10 @@ class Client:
             'id': uuid.uuid4()
         }
         
-        return self._process_command(cmd)
+        result = self._process_command(cmd)
+        if 'error' in result:
+            raise result['error']
+        return result.get('result')
     
     def _process_command(self, cmd):
         elapsed = 0
@@ -48,13 +51,11 @@ class Client:
                 resp_len = int.from_bytes(self.sock.recv(8), 'big')
                 while len(response) < resp_len:
                     chunk = self.sock.recv(1024)
-                    print(chunk)
                     if not chunk:
                         break
                     response += chunk
             except socket.timeout:
                 #  возможно разрыв
-                print('reconnecting...')
                 self._connect()
                 continue
             return pickle.loads(response)
@@ -76,6 +77,9 @@ class FileOperations:
     def delete(self, path):
         return self.client.send_cmd('delete_file', path)
     
+    def get_hash(self, path, alg):
+        return self.client.send_cmd('get_file_hash', path, alg)
+    
     def start(self):
         self.client = Client(self.ip, self.port)
 
@@ -88,10 +92,3 @@ class FileOperations:
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.stop()
-
-#with FileOperations('127.0.0.1', 1234) as c:
-#    print(c.list_dir('.'))
-#    c.write(r'.\test.txt', 'ab', b'XXX')
-#    print(c.list_dir('.'))
-#    c.delete(r'.\test.txt')
-#    print(c.list_dir('.'))

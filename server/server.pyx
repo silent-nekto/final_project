@@ -10,6 +10,7 @@ import pickle
 from collections import OrderedDict
 from threading import Lock, Event
 import os
+import hashlib
 
 
 class Record:
@@ -76,6 +77,17 @@ class FileService:
     
     def delete_file(self, path):
         os.remove(path)
+    
+    def get_file_hash(self, path, alg):
+        constructor = getattr(hashlib, alg, None)
+        if constructor is None:
+            raise ValueError(f'Unknown hash algorithm: {alg}')
+
+        hash_calculator = constructor()
+        with open(path, 'rb') as f_in:
+            for chunk in iter(lambda: f_in.read(4096), b''):
+                hash_calculator.update(chunk)
+        return hash_calculator.hexdigest()
 
 
 class Processor:
